@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -397,17 +396,22 @@ func (s Store) ReadAudit(limit int) ([]AuditRecord, error) {
 		return nil, err
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(file)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	records := []AuditRecord{}
-	for {
+	for line := int64(1); scanner.Scan(); line++ {
+		data := bytes.TrimSpace(scanner.Bytes())
+		if len(data) == 0 {
+			return nil, fmt.Errorf("audit line %d is blank", line)
+		}
 		var record AuditRecord
-		if err := decoder.Decode(&record); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
+		if err := decodeStrictJSON(data, &record); err != nil {
+			return nil, fmt.Errorf("audit line %d: %w", line, err)
 		}
 		records = append(records, record)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read audit: %w", err)
 	}
 	if limit > 0 && len(records) > limit {
 		records = records[len(records)-limit:]
